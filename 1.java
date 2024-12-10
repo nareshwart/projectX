@@ -1,1 +1,2 @@
-hi there, welcome to git sessions 
+hi there, welcome to git sessions
+doing good.
