@@ -4,4 +4,4 @@ all good
 lksajdf.
 
 
-Added some text here.
+Added some text here. Adding text some text being a contributor. 
