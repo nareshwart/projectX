@@ -1,0 +1,110 @@
+
+# IAM policy to remove dormant accounts inactive for 30+ days
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to remove dormant IAM users'
+
+Resources:
+  DormantUserCleanupLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          from datetime import datetime, timezone
+          import time
+
+          def handler(event, context):
+              iam = boto3.client('iam')
+              
+              # Get list of users
+              users = iam.list_users()['Users']
+              
+              for user in users:
+                  username = user['UserName']
+                  
+                  # Get last activity
+                  try:
+                      last_used = iam.get_user_last_used(UserName=username).get('UserLastUsed', {}).get('LastUsedDate')
+                      
+                      if last_used:
+                          # Convert to days
+                          days_inactive = (datetime.now(timezone.utc) - last_used).days
+                          
+                          # Remove if inactive for 30+ days
+                          if days_inactive >= 30:
+                              # First remove user from groups
+                              groups = iam.list_groups_for_user(UserName=username)['Groups']
+                              for group in groups:
+                                  iam.remove_user_from_group(
+                                      GroupName=group['GroupName'],
+                                      UserName=username
+                                  )
+                              
+                              # Delete access keys
+                              access_keys = iam.list_access_keys(UserName=username)['AccessKeyMetadata']
+                              for key in access_keys:
+                                  iam.delete_access_key(
+                                      UserName=username,
+                                      AccessKeyId=key['AccessKeyId']
+                                  )
+                              
+                              # Delete user
+                              iam.delete_user(UserName=username)
+                              
+                              print(f"Removed dormant user: {username}")
+                              
+                  except Exception as e:
+                      print(f"Error processing user {username}: {str(e)}")
+                      continue
+
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 128
+
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: IAMUserManagement
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'iam:ListUsers'
+                  - 'iam:GetUser'
+                  - 'iam:DeleteUser'
+                  - 'iam:ListGroupsForUser'
+                  - 'iam:RemoveUserFromGroup'
+                  - 'iam:ListAccessKeys'
+                  - 'iam:DeleteAccessKey'
+                Resource: '*'
+
+  ScheduledRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'Run dormant user cleanup daily'
+      ScheduleExpression: 'rate(1 day)'
+      State: 'ENABLED'
+      Targets:
+        - Arn: !GetAtt DormantUserCleanupLambda.Arn
+          Id: 'DormantUserCleanupTarget'
+
+  PermissionForEventsToInvokeLambda:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      FunctionName: !Ref DormantUserCleanupLambda
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt ScheduledRule.Arn
