@@ -1,0 +1,51 @@
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda function to fetch AWS IAM user details and export to Excel
+
+Resources:
+  FetchIAMUsersFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: FetchIAMUsersToExcel
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::123456789012:role/lambda-execution-role
+      Timeout: 300
+      Code:
+        ZipFile: |
+          import boto3
+          import pandas as pd
+          import io
+          import os
+
+          def lambda_handler(event, context):
+              iam = boto3.client('iam')
+              users = iam.list_users()['Users']
+              
+              user_data = []
+              for user in users:
+                  user_data.append({
+                      'UserName': user['UserName'],
+                      'UserId': user['UserId'],
+                      'Arn': user['Arn'],
+                      'CreateDate': user['CreateDate'].strftime('%Y-%m-%d %H:%M:%S')
+                  })
+
+              df = pd.DataFrame(user_data)
+              output = io.BytesIO()
+              with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                  df.to_excel(writer, index=False, sheet_name='IAM Users')
+              output.seek(0)
+
+              s3 = boto3.client('s3')
+              s3.put_object(Bucket='your-s3-bucket-name', Key='IAM_Users.xlsx', Body=output.getvalue())
+
+              return {
+                  'statusCode': 200,
+                  'body': 'IAM user details exported to Excel and uploaded to S3.'
+              }
+
+Outputs:
+  LambdaFunctionName:
+    Description: Name of the Lambda function
+    Value: !Ref FetchIAMUsersFunction
