@@ -1,0 +1,5 @@
+testnmainuser:
+  name: johndoe
+  email: johndoe@example.com
+  role: developer
+  active: true
